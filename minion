@@ -1,0 +1,330 @@
+#!/usr/local/bin/node
+
+var stringify = require("json-stringify-pretty-compact")
+var treeify = require('treeify');
+
+class FileDetails {
+	constructor (filename) {
+		const fs = require('fs')
+		this.filename = filename
+		this.exists = fs.existsSync(filename)
+	}
+}
+
+const optionDefinitions = [
+	{ name: 'verbose', alias: 'v', type: Boolean, defaultValue: false },
+	{ name: 'file', alias: 'f', multiple: false, defaultOption: true, defaultValue: './mta.yaml', type: filename => new FileDetails(filename) },
+	{ name: 'help', alias: 'h', type: Boolean },
+	{ name: 'use-namespaces', type: Boolean, defaultValue: false },
+	{ name: 'no-namespaces-for-services', type: Boolean, defaultValue: false },
+	{ name: 'timeout', alias: 't', type: Number }
+]
+
+						// Docs: https://help.sap.com/viewer/58746c584026430a890170ac4d87d03b/Cloud/en-US/ba7dd5a47b7a4858a652d15f9673c28d.html
+						// Use the Deployment as a guide.
+						// https://help.sap.com/viewer/DRAFT/4505d0bdaf4948449b7f7379d24d0f0d/2.0.03/en-US/4050fee4c469498ebc31b10f2ae15ff2.html
+
+const moduleTypes = [
+	{ enabled: true,  type: 'hdb',                mtad: 'com.sap.xs.hdi',    xs: true,  cf: true,  desc: 'HDI content activation' },
+	{ enabled: true,  type: 'html5',              mtad: 'javascript.nodejs', xs: true,  cf: true,  desc: 'HTML5 NodeJS app-router' },
+	{ enabled: true,  type: 'javascript.nodejs',  mtad: 'javascript.nodejs', xs: true,  cf: true,  desc: 'NodeJS run time' },
+	{ enabled: true,  type: 'nodejs',             mtad: 'javascript.nodejs', xs: true,  cf: true,  desc: 'NodeJS run time' },
+	{ enabled: false, type: 'native',             mtad: 'native',            xs: true,  cf: true,  desc: 'Native, likely C, C++ compiled to the target Linux server environment' },
+	{ enabled: false, type: 'custom',             mtad: 'custom',            xs: true,  cf: true,  desc: 'Custom run time + Automatic build-pack detectionx' },
+	{ enabled: true,  type: 'java',               mtad: 'java.tomcat',       xs: true,  cf: true,  desc: 'Tomcat run time of sap_java_buildpack (handle tomee with TARGET_RUNTIME env var)' },
+	{ enabled: true,  type: 'python',             mtad: 'python',            xs: true,  cf: true,  desc: 'Python run time' },
+	{ enabled: false, type: 'static',             mtad: 'staticfile',        xs: false, cf: true,  desc: 'Static file run time' },
+	{ enabled: false, type: 'ruby',               mtad: 'ruby',              xs: false, cf: true,  desc: 'Ruby run time' },
+	{ enabled: false, type: 'go',                 mtad: 'go',                xs: false, cf: true,  desc: 'Go run time' },
+	{ enabled: false, type: 'php',                mtad: 'php',               xs: false, cf: true,  desc: 'PHP run time' },
+	{ enabled: false, type: 'binary',             mtad: 'binary',            xs: false, cf: true,  desc: 'Binary run time' },
+	{ enabled: false, type: 'dotnet',             mtad: 'dotnet_core',       xs: false, cf: true,  desc: 'Dotnet run time' },
+	{ enabled: false, type: 'xxx',                mtad: 'xxx',               xs: true,  cf: true,  desc: 'xxxx' }
+]
+
+const resourceTypes = [
+	{ enabled: false, type: 'com.sap.xs.hana-sbss',             service: 'hana',                   xs: true,  cf: true,  plan: 'sbss',           desc: 'Service-broker security' },
+	{ enabled: false, type: 'com.sap.xs.hana-schema',           service: 'hana',                   xs: true,  cf: true,  plan: 'schema',         desc: 'Plain schema' },
+	{ enabled: true,  type: 'com.sap.xs.hdi-container',         service: 'hana',                   xs: true,  cf: true,  plan: 'hdi-shared',     desc: 'HDI container' },
+	{ enabled: false, type: 'com.sap.xs.managed-hdi-container', service: 'managed-hana',           xs: true,  cf: true,  plan: 'hdi-shared',     desc: 'Managed HDI container' },
+	{ enabled: false, type: 'com.sap.xs.managed-schema',        service: 'managed-hana',           xs: true,  cf: true,  plan: 'schema',         desc: 'Managed plain schema' },
+	{ enabled: false, type: 'com.sap.xs.managed-securestore',   service: 'managed-hana',           xs: true,  cf: true,  plan: 'securestore',    desc: 'Managed HANA secure store' },
+	{ enabled: false, type: 'com.sap.xs.jobscheduler',          service: 'jobscheduler',           xs: true,  cf: false, plan: 'default',        desc: 'Job Scheduler' },
+	{ enabled: false, type: 'com.sap.xs.jobscheduler',          service: 'jobscheduler',           xs: false, cf: true,  plan: 'lite',           desc: 'Job Scheduler' },
+	{ enabled: false, type: 'com.sap.xs.fs',                    service: 'fs-storage',             xs: true,  cf: false, plan: 'free',           desc: 'File-system storage' },
+	{ enabled: false, type: 'com.sap.xs.fs',                    service: 'fs-storage',             xs: false, cf: true,  plan: 'lite',           desc: 'File-system storage' },
+	{ enabled: true,  type: 'com.sap.xs.uaa',                   service: 'xsuaa',                  xs: true,  cf: true,  plan: 'default',        desc: 'Global UAA *' },
+	{ enabled: false, type: 'com.sap.xs.uaa-application',       service: 'xsuaa',                  xs: false, cf: true,  plan: 'application',    desc: 'PaaS-enabled application UAA service plan for CF scenarios' },
+	{ enabled: false, type: 'com.sap.xs.uaa-broker',            service: 'xsuaa',                  xs: false, cf: true,  plan: 'broker',         desc: 'PaaS-enabled broker UAA service for CF scenarios' },
+	{ enabled: false, type: 'com.sap.xs.uaa-devuser',           service: 'xsuaa',                  xs: true,  cf: true,  plan: 'devuser',        desc: 'Development-user UAA service' },
+	{ enabled: false, type: 'com.sap.xs.uaa-space',             service: 'xsuaa',                  xs: true,  cf: true,  plan: 'space',          desc: 'UAA service for a space' },
+	{ enabled: false, type: 'com.sap.xs.uaa-system',            service: 'xsuaa',                  xs: false, cf: true,  plan: 'system',         desc: 'PaaS-enabled system UAA service for CF scenarios' },
+	{ enabled: false, type: 'com.sap.xs.sds',                   service: 'sds',                    xs: true,  cf: true,  plan: 'default',        desc: 'Streaming Analytics' },
+	{ enabled: false, type: 'com.sap.xs.auditlog',              service: 'auditlog',               xs: true,  cf: false, plan: 'free',           desc: 'Audit-log service' },
+	{ enabled: false, type: 'auditlog',                         service: 'auditlog',               xs: false, cf: true,  plan: 'standard',       desc: 'Audit-log service' },
+	{ enabled: false, type: 'com.sap.portal.site-content',      service: 'portal-services',        xs: true,  cf: true,  plan: 'site-content',   desc: 'Portal services(content)' },	
+	{ enabled: false, type: 'com.sap.portal.site-host',         service: 'portal-services',        xs: true,  cf: true,  plan: 'site-host',      desc: 'Portal services(host)' },	
+	{ enabled: false, type: 'application-logs',                 service: 'application-logs',       xs: false, cf: true,  plan: 'lite',           desc: 'Streams logs of bound applications to a central application logging stack' },
+	{ enabled: false, type: 'autoscaler',                       service: 'autoscaler',             xs: false, cf: true,  plan: 'lite',           desc: 'Automatically increase or decrease the number of application instances based on a policy you define.' },
+	{ enabled: false, type: 'connectivity',                     service: 'connectivity',           xs: false, cf: true,  plan: 'lite',           desc: 'Establishes secure, reliable connectivity between Cloud applications and on-premise systems' },
+	{ enabled: false, type: 'feature-flags',                    service: 'feature-flags',          xs: false, cf: true,  plan: 'lite',           desc: 'Feature Flags service for the control of feature rollout' },
+	{ enabled: false, type: 'ml-foundation-services',           service: 'ml-foundation-services', xs: false, cf: true,  plan: 'lite',           desc: 'Provides access to foundation services by provisioning and deprovisioning ml foundation services' },
+	{ enabled: false, type: 'mongodb',                          service: 'mongodb',                xs: false, cf: true,  plan: 'v3.0-container', desc: 'MongoDB document-oriented database system' },
+	{ enabled: false, type: 'objectstore',                      service: 'objectstore',            xs: false, cf: true,  plan: 's3-standard',    desc: 'Provides a highly available, distributed, consistent object store' },
+	{ enabled: false, type: 'postgresql',                       service: 'postgresql',             xs: false, cf: true,  plan: 'v9.4-container', desc: 'Provides a postgreSQL object-relational database system' },
+	{ enabled: false, type: 'rabbitmq',                         service: 'rabbitmq',               xs: false, cf: true,  plan: 'v3.6-container', desc: 'Provides RabbitMQ messaging' },
+	{ enabled: false, type: 'redis',                            service: 'redis',                  xs: false, cf: true,  plan: 'v3.0-container', desc: 'Redis in-memory data structure store' },
+	{ enabled: false, type: 'xxx',                              service: 'xxx',                    xs: true,  cf: true,  plan: 'xxx',            desc: 'xxx' }
+]
+
+
+// 
+const commandLineArgs = require('command-line-args')
+const options = commandLineArgs(optionDefinitions)
+
+const commandLineUsage = require('command-line-usage')
+
+const sections = [
+	{
+		header: 'Minion',
+		content: 'NodeJS utility that reads mta.yaml files and performs needed actions.'
+	},
+	{
+		header: 'Options',
+		optionList: [
+			{
+			name: 'file',
+				typeLabel: '{underline mta.yaml}',
+				description: 'The mta.yaml file to process. (default = mta.yaml)'
+			},
+			{
+				name: 'use-namespaces',
+				description: 'Use namespaces in app and service names.'
+			},
+			{
+				name: 'no-namespaces-for-services',
+				description: 'Do not use namespaces in service names.'
+			},
+			{
+				name: 'verbose',
+				description: 'Verbose output.'
+			},
+			{
+			name: 'help',
+				description: 'Print this usage guide.'
+			}
+		]
+	}
+]
+
+const usage = commandLineUsage(sections)
+const fs = require('fs')
+
+var DepGraph = require('dependency-graph').DepGraph;
+
+yaml = require('js-yaml');
+
+// https://www.npmjs.com/package/dependency-graph
+var graph = new DepGraph({ circular: true });
+
+//graph.addNode('d');
+//graph.addNode('m');
+//graph.addNode('r');
+//
+//graph.addDependency('d', 'm');
+//graph.addDependency('m', 'r');
+
+//console.log(JSON.stringify(graph.overallOrder()));
+
+if (options.verbose) { console.log("\nStart Minion.\n"); }
+
+if (options.help) {
+	console.log(usage)
+}
+else {
+
+	if (options.verbose) {
+		console.log("\n");
+		console.log("Minion Stuff.\n");
+	}
+
+	if (typeof(options.file) === "string") {
+		options.file = new FileDetails(options.file);
+	}
+
+	//console.log("Options:\n" + stringify(options, {indent: 1}) + "\n");
+	console.log("Options:\n" + treeify.asTree(options,true) + "\n");
+
+	if (options.verbose) { console.log("\n"); }
+
+	// http://connec.github.io/yaml-js/
+
+
+	if (options.file.exists) {
+		// http://thisdavej.com/getting-started-with-yaml-in-node-js-using-js-yaml/
+		// https://en.wikipedia.org/wiki/YAML
+		// http://lzone.de/cheat-sheet/YAML
+		try {
+			var doc = yaml.safeLoad(fs.readFileSync(options.file.filename, 'utf8'));
+			// console.log("MTA.YAML File: \n" + treeify.asTree(doc,true) + "\n");
+
+			// Insert the root into the graph
+			graph.addNode('doc', doc.ID);
+			graph.addNode('modules');
+			graph.addDependency('doc', 'modules');
+			graph.addNode('resources');
+			graph.addDependency('modules','resources');
+
+			// Insert resources into the graph
+			doc.resources.forEach((resource, index) => {
+				console.log("res[" + index + "]: " + resource.name + "\n");
+				graph.addNode(resource.name, resource);
+				graph.addDependency('resources',resource.name);
+			});
+
+			// Insert modules into the graph
+			doc.modules.forEach((module, index) => {
+				console.log("mod[" + index + "]: " + module.name + "\n");
+				graph.addNode(module.name, module);
+				graph.addDependency('modules',module.name);
+			});
+
+			// Set dependencies (from, to)
+			doc.modules.forEach((module, index) => {
+				if (typeof(module.requires) === "object") {
+
+					// The module will either require a resource with that name or another module that 'provides' that name
+					module.requires.forEach((req, idx) => {
+
+						// Loop through the resources looking for it.
+						doc.resources.forEach((resource, index) => {
+							//console.log("res[" + index + "]: " + resource.name + "\n");
+							if (req.name == resource.name) {
+								console.log("mod[" + module.name + "] -> " + req.name + "\n");
+								graph.addDependency(req.name,resource.name);
+							}
+						});
+
+						// Loop through the modules looking for one that provides it.
+						doc.modules.forEach((mod, index) => {
+							//console.log("mod[" + index + "]: " + mod.name + "\n");
+							//console.log(typeof(mod.provides));
+							if (typeof(mod.provides) === "object") {
+							mod.provides.forEach((prov, pidx) => {
+								if (req.name == prov.name) {
+									console.log("mod[" + module.name + "] -> " + mod.name + "\n");
+									graph.addDependency(module.name,mod.name);
+								}
+							});
+							}
+						});
+
+					});
+				}
+			});
+
+			// Print out the order of dependencies
+			//console.log("mod deps:\n" + stringify(graph.dependenciesOf('doc')) + "\n");
+			var deps = graph.overallOrder();
+			console.log("mod deps:\n" + JSON.stringify(deps) + "\n");
+
+			var node = {};
+			var didx = 0;
+			deps.forEach((dep, index) => {
+				if ((dep !== "resources") && (dep !== "modules") && (dep !== "doc")) {
+					node = graph.getNodeData(dep);
+					console.log("node[" + didx + "] = " + node.name + "\n");
+					// console.log("\n" + treeify.asTree(node,true) + "\n");
+
+					// Process this type of node
+					// Find details on how to handle this node type
+					// See if it's a resource
+					resourceTypes.forEach((rtype, index) => {
+						if (node.type == rtype.type) {
+							if (rtype.enabled) {
+								// console.log("resType " +node.type + " found, and is enabled.\n");
+								
+								// Create Service
+								svc_name = rtype.service;
+								svc_plan = rtype.plan;
+								svc_inst = node.name;
+
+								if ((options['use-namespaces']) && (!(options['no-namespaces-for-services']))) { 
+									svc_inst = (doc.ID).toLowerCase() + '.' + node.name;
+								}
+
+								console.log("Action:");
+								console.log("xs cs " + svc_name + " " + svc_plan + " " + svc_inst + "\n");
+								// Bind ?
+							}
+							else {
+								// Issue warning
+								console.log("resType " +node.type + " found, but not enabled.\n");
+							}		
+						}
+					});
+					// See if it's a module
+					moduleTypes.forEach((mtype, index) => {
+						if (node.type == mtype.type) {
+							if (mtype.enabled) {
+								// console.log("nodeType " +node.type + " found, and is enabled.\n");
+								// Push
+								// Defaults
+								app_name = node.name;
+								app_disk = '1024M';
+								app_mem = '256M';
+								app_host = node.name;
+								app_path = node.name;
+
+								//app_opts = '--no-start';
+								app_opts = '';
+
+								if (options['use-namespaces']) { 
+									app_name = (doc.ID).toLowerCase() + '.' + node.name;
+								}
+								else {
+									app_name = node.name;
+								}
+
+								if (typeof(node.parameters) === "object") {
+									if (typeof(node.parameters.memory) === "string") {
+										app_mem = node.parameters.memory;
+									}
+									if (typeof(node.parameters.host) === "string") {
+										app_host = node.parameters.host;
+									}
+								}
+
+								if (typeof(node.path) === "string") {
+									app_path = node.path;
+								}
+
+								console.log("Action:");
+								console.log("xs push " + app_name + " -k " + app_disk + " -m " + app_mem + " -n " + app_host + " -p " + app_path + " " + app_opts + "\n");
+
+								// Bind
+								// xs bind-service APP SERVICE_INSTANCE
+							}
+							else {
+								// Issue warning
+								console.log("nodeType " +node.type + " found, but not enabled.\n");
+							}		
+						}
+					});
+
+					didx++;
+				}
+			});
+
+
+		} catch (e) {
+			console.log("Yaml load error:" + e);
+		}
+	}
+	else {
+		console.log("File: " + options.file.filename + " doesn't exist.\n");
+	}
+}
+
+if (options.verbose) { console.log("End Minion.\n"); }
+
