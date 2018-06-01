@@ -3,6 +3,8 @@
 var stringify = require("json-stringify-pretty-compact")
 var treeify = require('treeify');
 
+const fs = require('fs')
+
 class FileDetails {
 	constructor (filename) {
 		const fs = require('fs')
@@ -12,11 +14,15 @@ class FileDetails {
 }
 
 const optionDefinitions = [
-	{ name: 'verbose', alias: 'v', type: Boolean, defaultValue: false },
+	{ name: 'verbose', alias: 'v', type: Boolean, multiple: true, defaultValue: false },
 	{ name: 'file', alias: 'f', multiple: false, defaultOption: true, defaultValue: './mta.yaml', type: filename => new FileDetails(filename) },
 	{ name: 'help', alias: 'h', type: Boolean },
-	{ name: 'use-namespaces', type: Boolean, defaultValue: false },
+	{ name: 'use-namespaces', alias: 'u', type: Boolean, defaultValue: false },
 	{ name: 'no-namespaces-for-services', type: Boolean, defaultValue: false },
+	{ name: 'rectify-comments', alias: 'r', type: Boolean, defaultValue: false },
+	{ name: 'generate-mtad', alias: 'g', type: Boolean, defaultValue: false },
+	{ name: 'dry-run', alias: 'd', type: Boolean, defaultValue: false },
+	{ name: 'output-actions', alias: 'a', type: Boolean, defaultValue: false },
 	{ name: 'timeout', alias: 't', type: Number }
 ]
 
@@ -93,24 +99,40 @@ const sections = [
 		header: 'Options',
 		optionList: [
 			{
-			name: 'file',
+			name: '{underline f}ile',
 				typeLabel: '{underline mta.yaml}',
 				description: 'The mta.yaml file to process. (default = mta.yaml)'
 			},
 			{
-				name: 'use-namespaces',
+				name: '{underline u}se-namespaces',
 				description: 'Use namespaces in app and service names.'
 			},
 			{
-				name: 'no-namespaces-for-services',
+				name: '{underline n}o-namespaces-for-services',
 				description: 'Do not use namespaces in service names.'
 			},
 			{
-				name: 'verbose',
-				description: 'Verbose output.'
+				name: '{underline r}ectify-comments',
+				description: 'Preprocess the mta.yaml file to comment/un-comment blocks demarked with blah.'
 			},
 			{
-			name: 'help',
+				name: '{underline g}enerate-mtad',
+				description: 'Generate an mtad.yaml file from the mta.yaml file.'
+			},
+			{
+				name: '{underline d}ry-run',
+				description: 'Don\'t attempt to execute actions. --generate-mtad will still create an mtad.yaml file if specified.'
+			},
+			{
+				name: 'output-{underline a}ctions',
+				description: 'Echo to the console actions that will be taken. Use with --dry-run if you don\'t want minion to perform the actions.'
+			},
+			{
+				name: '{underline v}erbose',
+				description: 'Verbose output. Use -vv and -vvv for increased verbosity.'
+			},
+			{
+			name: '{underline h}elp',
 				description: 'Print this usage guide.'
 			}
 		]
@@ -118,7 +140,9 @@ const sections = [
 ]
 
 const usage = commandLineUsage(sections)
-const fs = require('fs')
+
+var cmd = "";
+var cmds = [];
 
 var DepGraph = require('dependency-graph').DepGraph;
 
@@ -134,28 +158,32 @@ var graph = new DepGraph({ circular: true });
 //graph.addDependency('d', 'm');
 //graph.addDependency('m', 'r');
 
-//console.log(JSON.stringify(graph.overallOrder()));
+//if (verbosity >= 1) { console.log(JSON.stringify(graph.overallOrder())); }
 
-if (options.verbose) { console.log("\nStart Minion.\n"); }
+var verbosity = 0;
+
 
 if (options.help) {
 	console.log(usage)
 }
 else {
 
-	if (options.verbose) {
-		console.log("\n");
-		console.log("Minion Stuff.\n");
-	}
+	verbosity = options.verbose.length;
+	if (!(options.verbose[0])) { verbosity = 0; }
+
+   if (verbosity >= 1) { console.log("\nStart Minion.\n"); }
+
+	if (verbosity >= 1) { console.log("verbosity: " + verbosity + "\n"); }
+
+	if (verbosity >= 2) { console.log("Minion Stuff.\n"); }
 
 	if (typeof(options.file) === "string") {
 		options.file = new FileDetails(options.file);
 	}
 
-	//console.log("Options:\n" + stringify(options, {indent: 1}) + "\n");
-	console.log("Options:\n" + treeify.asTree(options,true) + "\n");
+	//if (verbosity >= 1) { console.log("Options:\n" + stringify(options, {indent: 1}) + "\n"); }
+	if (verbosity >= 2) { console.log("Options:\n" + treeify.asTree(options,true) + "\n"); }
 
-	if (options.verbose) { console.log("\n"); }
 
 	// http://connec.github.io/yaml-js/
 
@@ -166,7 +194,37 @@ else {
 		// http://lzone.de/cheat-sheet/YAML
 		try {
 			var doc = yaml.safeLoad(fs.readFileSync(options.file.filename, 'utf8'));
-			// console.log("MTA.YAML File: \n" + treeify.asTree(doc,true) + "\n");
+			if (verbosity >= 3) { console.log("MTA.YAML File: \n" + treeify.asTree(doc,true) + "\n"); }
+
+			if (options['generate-mtad']) { 
+				
+				var newDoc = JSON.parse(JSON.stringify(doc));
+
+				newDoc.modules.forEach((module, index) => {
+					if (verbosity >= 3) { console.log("mod[" + index + "]: " + module.name + "\n"); }
+					//Replace Module type with mtad version
+					moduleTypes.forEach((mtype, index) => {
+						if (module.type == mtype.type) {
+							if (mtype.enabled) {
+								module.type = mtype.mtad;	
+							}
+							else {
+								if (verbosity >= 1) { console.log("Module type " + mtype.type + " replacement needed, but it is not enabled."); }
+							}
+						}
+					});
+				});
+
+				mtad_filename = options.file.filename.replace("mta.yaml","mtad.yaml");
+				if (verbosity >= 3) { console.log("MTAD.YAML File: " + mtad_filename + "\n" + treeify.asTree(newDoc,true) + "\n"); }
+				fs.writeFileSync(mtad_filename, yaml.dump(newDoc),'utf8', function (err) {
+    				if (err) {
+			        return console.log(err);
+    				}
+
+				   if (verbosity >= 3) { console.log("The file was saved!"); }
+				});
+			}
 
 			// Insert the root into the graph
 			graph.addNode('doc', doc.ID);
@@ -177,14 +235,14 @@ else {
 
 			// Insert resources into the graph
 			doc.resources.forEach((resource, index) => {
-				console.log("res[" + index + "]: " + resource.name + "\n");
+				if (verbosity >= 2) { console.log("res[" + index + "]: " + resource.name + "\n"); }
 				graph.addNode(resource.name, resource);
 				graph.addDependency('resources',resource.name);
 			});
 
 			// Insert modules into the graph
 			doc.modules.forEach((module, index) => {
-				console.log("mod[" + index + "]: " + module.name + "\n");
+				if (verbosity >= 2) { console.log("mod[" + index + "]: " + module.name + "\n"); }
 				graph.addNode(module.name, module);
 				graph.addDependency('modules',module.name);
 			});
@@ -198,21 +256,21 @@ else {
 
 						// Loop through the resources looking for it.
 						doc.resources.forEach((resource, index) => {
-							//console.log("res[" + index + "]: " + resource.name + "\n");
+							//if (verbosity >= 2) { console.log("res[" + index + "]: " + resource.name + "\n"); }
 							if (req.name == resource.name) {
-								console.log("mod[" + module.name + "] -> " + req.name + "\n");
+								if (verbosity >= 2) { console.log("mod[" + module.name + "] -> " + req.name + "\n"); }
 								graph.addDependency(req.name,resource.name);
 							}
 						});
 
 						// Loop through the modules looking for one that provides it.
 						doc.modules.forEach((mod, index) => {
-							//console.log("mod[" + index + "]: " + mod.name + "\n");
-							//console.log(typeof(mod.provides));
+							//if (verbosity >= 2) { console.log("mod[" + index + "]: " + mod.name + "\n"); }
+							//if (verbosity >= 2) { console.log(typeof(mod.provides)); }
 							if (typeof(mod.provides) === "object") {
 							mod.provides.forEach((prov, pidx) => {
 								if (req.name == prov.name) {
-									console.log("mod[" + module.name + "] -> " + mod.name + "\n");
+									if (verbosity >= 2) { console.log("mod[" + module.name + "] -> " + mod.name + "\n"); }
 									graph.addDependency(module.name,mod.name);
 								}
 							});
@@ -224,25 +282,33 @@ else {
 			});
 
 			// Print out the order of dependencies
-			//console.log("mod deps:\n" + stringify(graph.dependenciesOf('doc')) + "\n");
+			//if (verbosity >= 2) { console.log("mod deps:\n" + stringify(graph.dependenciesOf('doc')) + "\n"); }
 			var deps = graph.overallOrder();
-			console.log("mod deps:\n" + JSON.stringify(deps) + "\n");
+			if (verbosity >= 2) { console.log("mod deps:\n" + JSON.stringify(deps) + "\n"); }
+
+			// General Actions
+			if (verbosity >= 2) { console.log("General Actions:"); }
+
+			cmd = 'npm config set @sap:registry "https://npm.sap.com/" ; npm config set registry "https://registry.npmjs.org/" ; npm config set strict-ssl true';
+			if (verbosity >= 2) { console.log(cmd); }
+			cmds.push(cmd);
 
 			var node = {};
 			var didx = 0;
 			deps.forEach((dep, index) => {
 				if ((dep !== "resources") && (dep !== "modules") && (dep !== "doc")) {
 					node = graph.getNodeData(dep);
-					console.log("node[" + didx + "] = " + node.name + "\n");
-					// console.log("\n" + treeify.asTree(node,true) + "\n");
+					if (verbosity >= 1) { console.log("node[" + didx + "] = " + node.name + ""); }
+					if (verbosity >= 3) { console.log("\n" + treeify.asTree(node,true) + "\n"); }
 
 					// Process this type of node
+
 					// Find details on how to handle this node type
 					// See if it's a resource
 					resourceTypes.forEach((rtype, index) => {
 						if (node.type == rtype.type) {
 							if (rtype.enabled) {
-								// console.log("resType " +node.type + " found, and is enabled.\n");
+								if (verbosity >= 3) { console.log("resType " +node.type + " found, and is enabled.\n"); }
 								
 								// Create Service
 								svc_name = rtype.service;
@@ -250,24 +316,26 @@ else {
 								svc_inst = node.name;
 
 								if ((options['use-namespaces']) && (!(options['no-namespaces-for-services']))) { 
-									svc_inst = (doc.ID).toLowerCase() + '.' + node.name;
+									svc_inst = doc.ID + '.' + node.name;
 								}
 
-								console.log("Action:");
-								console.log("xs cs " + svc_name + " " + svc_plan + " " + svc_inst + "\n");
+								if (verbosity >= 2) { console.log("Action:"); }
+								if (verbosity >= 2) { console.log("xs cs " + svc_name + " " + svc_plan + " " + svc_inst + "\n"); }
 								// Bind ?
 							}
 							else {
 								// Issue warning
-								console.log("resType " +node.type + " found, but not enabled.\n");
+								if (verbosity >= 2) { console.log("resType " +node.type + " found, but not enabled.\n"); }
 							}		
 						}
 					});
+
 					// See if it's a module
 					moduleTypes.forEach((mtype, index) => {
+						if (verbosity >= 3) { console.log(node.type + " == " + mtype.type); }
 						if (node.type == mtype.type) {
 							if (mtype.enabled) {
-								// console.log("nodeType " +node.type + " found, and is enabled.\n");
+								if (verbosity >= 2) { console.log("nodeType " +node.type + " found, and is enabled.\n"); }
 								// Push
 								// Defaults
 								app_name = node.name;
@@ -299,15 +367,44 @@ else {
 									app_path = node.path;
 								}
 
-								console.log("Action:");
-								console.log("xs push " + app_name + " -k " + app_disk + " -m " + app_mem + " -n " + app_host + " -p " + app_path + " " + app_opts + "\n");
+								if (verbosity >= 2) { console.log("Action:"); }
+								if (mtype.mtad == "javascript.nodejs") {
+									cmd = "cd " + app_path + " ; rm -rf node_modules ; npm install ; cd .."
+									cmds.push(cmd);
+									if (verbosity >= 2) { console.log(cmd); }
+								}
+
+								if (mtype.mtad == "com.sap.xs.hdi") {
+
+									if (typeof(node.requires) === "object") {
+										if (typeof(node.requires[0].name) === "string") {
+											db_req = node.requires[0].name;
+
+											if ((options['use-namespaces']) && (!(options['no-namespaces-for-services']))) { 
+												db_req = (doc.ID).toLowerCase() + '.' + db_req;
+											}
+
+											cmd = "prep4hdi-deploy " + app_path + " " + db_req;
+											cmds.push(cmd);
+											if (verbosity >= 2) { console.log(cmd); }
+
+											cmd = "hdi-deploy " + app_path;
+											cmds.push(cmd);
+											if (verbosity >= 2) { console.log(cmd); }
+										}
+									}
+								}
+
+								cmd = "xs push " + app_name + " -k " + app_disk + " -m " + app_mem + " -n " + app_host + " -p " + app_path + " " + app_opts;
+								cmds.push(cmd);
+								if (verbosity >= 2) { console.log(cmd); }
 
 								// Bind
 								// xs bind-service APP SERVICE_INSTANCE
 							}
 							else {
 								// Issue warning
-								console.log("nodeType " +node.type + " found, but not enabled.\n");
+								if (verbosity >= 2) { console.log("nodeType " +node.type + " found, but not enabled.\n"); }
 							}		
 						}
 					});
@@ -317,14 +414,47 @@ else {
 			});
 
 
+			if (verbosity >= 2) { console.log("Packaging Actions:"); }
+
+			cmd = "mkdir -p target";
+			cmds.push(cmd); if (verbosity >= 2) { console.log(cmd); }
+
+			cmd = "mta --build-target XSA --mtar target/" + (doc.ID).toLowerCase() + ".mtar build";
+			cmds.push(cmd); if (verbosity >= 2) { console.log(cmd); }
+
+			deploy_ops = "";
+			if (options['use-namespaces']) {
+				deploy_ops += " --use-namespaces";
+			}
+			if (options['no-namespaces-for-services']) {
+				deploy_ops += " --no-namespaces-for-services";
+			}
+
+			if (verbosity >= 2) { console.log("Deploy Actions:"); }
+			cmd = "xs deploy target/" + (doc.ID).toLowerCase() + ".mtar" + deploy_ops;
+			cmds.push(cmd); if (verbosity >= 2) { console.log(cmd); }
+
+			
+			if (verbosity >= 2) { console.log("Undeploy Actions:"); }
+			cmd = "xs undeploy " + doc.ID + " --delete-services -f";
+			cmds.push(cmd); if (verbosity >= 2) { console.log(cmd); }
+			
+			if (options['output-actions']) {
+				console.log("");
+				cmds.forEach((cmd, idx) => {
+					console.log(cmd);
+				});
+				console.log("");
+			}
+
 		} catch (e) {
-			console.log("Yaml load error:" + e);
+			if (verbosity >= 2) { console.log("Yaml load error:" + e); }
 		}
 	}
 	else {
-		console.log("File: " + options.file.filename + " doesn't exist.\n");
+		if (verbosity >= 2) { console.log("File: " + options.file.filename + " doesn't exist.\n"); }
 	}
 }
 
-if (options.verbose) { console.log("End Minion.\n"); }
+if (verbosity >= 1) { console.log("\nMinion Ends.\n"); }
 
