@@ -1,5 +1,8 @@
 #!/usr/local/bin/node
 
+const { execSync } = require('child_process');
+
+
 var stringify = require("json-stringify-pretty-compact")
 var treeify = require('treeify');
 
@@ -16,14 +19,23 @@ class FileDetails {
 const optionDefinitions = [
 	{ name: 'verbose', alias: 'v', type: Boolean, multiple: true, defaultValue: false },
 	{ name: 'file', alias: 'f', multiple: false, defaultOption: true, defaultValue: './mta.yaml', type: filename => new FileDetails(filename) },
+	{ name: 'changed-file', alias: 'c', type: String },
 	{ name: 'help', alias: 'h', type: Boolean },
 	{ name: 'use-namespaces', alias: 'u', type: Boolean, defaultValue: false },
-	{ name: 'no-namespaces-for-services', type: Boolean, defaultValue: false },
+	{ name: 'no-namespaces-for-services', alias: 'n', type: Boolean, defaultValue: false },
 	{ name: 'rectify-comments', alias: 'r', type: Boolean, defaultValue: false },
 	{ name: 'generate-mtad', alias: 'g', type: Boolean, defaultValue: false },
+	{ name: 'mtaext', alias: 'e', type: Boolean, defaultValue: false },
 	{ name: 'dry-run', alias: 'd', type: Boolean, defaultValue: false },
 	{ name: 'output-actions', alias: 'a', type: Boolean, defaultValue: false },
-	{ name: 'timeout', alias: 't', type: Number }
+	{ name: 'target', alias: 't', type: String, defaultValue: 'xsa' }
+]
+
+const watchFiles = [
+	'mta.yaml',
+	'xs-security.json',
+	'deploy_cf.mtaext',
+	'deploy_xsa.mtaext'
 ]
 
 						// Docs: https://help.sap.com/viewer/58746c584026430a890170ac4d87d03b/Cloud/en-US/ba7dd5a47b7a4858a652d15f9673c28d.html
@@ -90,6 +102,25 @@ const options = commandLineArgs(optionDefinitions)
 
 const commandLineUsage = require('command-line-usage')
 
+var auto_script = "DIFF=0 ; LAST=0 ; \n";
+auto_script += "inotifywait -re modify -m --exclude '/\\..+' . | \n";
+auto_script += "while read -r directory events filename; do \n";
+auto_script += " relpath=$directory$filename; \n";
+auto_script += " NOW=$(date +%s); \n";
+auto_script += " DIFF=$(($NOW - $LAST)); \n";
+auto_script += " if [[ $DIFF -gt 10 ]]; then \n";
+auto_script += "  echo ; \n";
+auto_script += "  echo minion -u -c $relpath ; \n";
+auto_script += "  minion -u -c $relpath ; \n";
+auto_script += " fi ; \n";
+auto_script += " LAST=$(date +%s); \n";
+auto_script += "done\n";
+
+auto_script += "\n";
+auto_script += "For a single running instance, change into it's app directory.\n";
+auto_script += "dir=$(ps aux | grep 'python server.py' | grep executionroot | tr -s '' | cut -d ' ' -f 26 | cut -d '.' -f 1,2,3) ; cd $dir";
+auto_script += "\n";
+
 const sections = [
 	{
 		header: 'Minion',
@@ -102,6 +133,10 @@ const sections = [
 			name: '{underline f}ile',
 				typeLabel: '{underline mta.yaml}',
 				description: 'The mta.yaml file to process. (default = mta.yaml)'
+			},
+			{
+				name: '{underline c}hanged-file',
+				description: 'Relative path to a recently changed file. If --output-actions is specified, needed actions will be output.'
 			},
 			{
 				name: '{underline u}se-namespaces',
@@ -132,6 +167,14 @@ const sections = [
 				description: 'Verbose output. Use -vv and -vvv for increased verbosity.'
 			},
 			{
+				name: '{underline c}f',
+				description: 'Target Cloud Foundry for deployment.'
+			},
+			{
+				name: '{underline x}sa',
+				description: 'Target XSA on-prem for deployment.'
+			},
+			{
 			name: '{underline h}elp',
 				description: 'Print this usage guide.'
 			}
@@ -143,6 +186,7 @@ const usage = commandLineUsage(sections)
 
 var cmd = "";
 var cmds = [];
+var ccmds = [];	// Change commands
 
 var DepGraph = require('dependency-graph').DepGraph;
 
@@ -162,19 +206,32 @@ var graph = new DepGraph({ circular: true });
 
 var verbosity = 0;
 
+var cli = 'xs';
 
 if (options.help) {
 	console.log(usage)
+	console.log("Automation Script:\n\n" + auto_script + "\n");
 }
 else {
 
 	verbosity = options.verbose.length;
 	if (!(options.verbose[0])) { verbosity = 0; }
 
-   if (verbosity >= 1) { console.log("\nStart Minion.\n"); }
+	if (verbosity >= 1) { console.log("\nStart Minion.\n"); }
 
 	if (verbosity >= 1) { console.log("verbosity: " + verbosity + "\n"); }
 
+	options.target = options.target.toLowerCase();
+
+	if (options.target === 'xsa') {
+		cli = 'xs';
+	}
+	else if (options.target === 'cf') {
+		cli = 'cf';
+	}
+	else {
+		cli = 'xs';
+	}
 	if (verbosity >= 2) { console.log("Minion Stuff.\n"); }
 
 	if (typeof(options.file) === "string") {
@@ -293,11 +350,45 @@ else {
 			if (verbosity >= 2) { console.log(cmd); }
 			cmds.push(cmd);
 
+			var changed = "";
+			var changed_node = {};
+			var in_file = "";
+
+
+			if (typeof(options['changed-file']) === 'string') {
+
+				in_file = options['changed-file'];
+				in_file = in_file.substring(2,in_file.length);
+				// Parse out the module path
+				var n = in_file.indexOf("\/");
+				if ( n > 0 ) {
+					in_file = in_file.substring(0,n);
+				}
+
+				// See if it's a top level file.
+
+				watchFiles.forEach((file) => {
+					if (file === in_file) {
+						changed = file;
+						if (verbosity >= 2) { console.log("Changed: " + changed); }
+					}
+				});
+
+			}
+
+
 			var node = {};
 			var didx = 0;
 			deps.forEach((dep, index) => {
 				if ((dep !== "resources") && (dep !== "modules") && (dep !== "doc")) {
+
 					node = graph.getNodeData(dep);
+					if (dep === in_file) {
+						changed = dep;
+						changed_node = node;
+						if (verbosity >= 1) { console.log("Changed: " + changed); }
+
+					}
 					if (verbosity >= 1) { console.log("node[" + didx + "] = " + node.name + ""); }
 					if (verbosity >= 3) { console.log("\n" + treeify.asTree(node,true) + "\n"); }
 
@@ -320,7 +411,7 @@ else {
 								}
 
 								if (verbosity >= 2) { console.log("Action:"); }
-								if (verbosity >= 2) { console.log("xs cs " + svc_name + " " + svc_plan + " " + svc_inst + "\n"); }
+								if (verbosity >= 2) { console.log(cli + " cs " + svc_name + " " + svc_plan + " " + svc_inst + "\n"); }
 								// Bind ?
 							}
 							else {
@@ -395,23 +486,41 @@ else {
 									}
 								}
 
-								cmd = "xs push " + app_name + " -k " + app_disk + " -m " + app_mem + " -n " + app_host + " -p " + app_path + " " + app_opts;
+								cmd = cli + " push " + app_name + " -k " + app_disk + " -m " + app_mem + " -n " + app_host + " -p " + app_path + " " + app_opts;
 								cmds.push(cmd);
 								if (verbosity >= 2) { console.log(cmd); }
 
-								// Bind
-								// xs bind-service APP SERVICE_INSTANCE
+								if (dep === in_file) {
+									ccmds.push(cmd);
+									// ReBind??
+									// xs bind-service APP SERVICE_INSTANCE
+									// console.log(treeify.asTree(changed_node,true));
+									changed_node.requires.forEach((req) => {
+										// Bind to required service instance
+										var svc_name = req.name;
+										if ((options['use-namespaces']) && (!(options['no-namespaces-for-services']))) { 
+												svc_name = (doc.ID).toLowerCase() + '.' + svc_name;
+										}
+										cmd = cli + " bind-service " + app_name + " " + svc_name;
+										ccmds.push(cmd);
+									});
+									if (changed_node.requires.length > 0) {
+										cmd = cli + " restart " + app_name;
+										ccmds.push(cmd);
+									}
+								}
+
 							}
 							else {
 								// Issue warning
 								if (verbosity >= 2) { console.log("nodeType " +node.type + " found, but not enabled.\n"); }
 							}		
 						}
-					});
+					}); // For each module
 
 					didx++;
-				}
-			});
+				}	// If it's not a placeholder module in the graph
+			});	// For each dependency in the graph
 
 
 			if (verbosity >= 2) { console.log("Packaging Actions:"); }
@@ -419,7 +528,16 @@ else {
 			cmd = "mkdir -p target";
 			cmds.push(cmd); if (verbosity >= 2) { console.log(cmd); }
 
-			cmd = "mta --build-target XSA --mtar target/" + (doc.ID).toLowerCase() + ".mtar build";
+			if (options.target === 'xsa') {
+				cmd = "mta --build-target XSA --mtar target/" + (doc.ID).toLowerCase() + "_xsa.mtar build";
+			}
+			else if (options.target === 'cf') {
+				cmd = "mta --build-target CF --mtar target/" + (doc.ID).toLowerCase() + "_cf.mtar build";
+			}
+			else {
+				cmd = "mta --build-target XSA --mtar target/" + (doc.ID).toLowerCase() + "_xsa.mtar build";
+			}
+
 			cmds.push(cmd); if (verbosity >= 2) { console.log(cmd); }
 
 			deploy_ops = "";
@@ -430,19 +548,56 @@ else {
 				deploy_ops += " --no-namespaces-for-services";
 			}
 
+			if (options['mtaext']) {
+				if (options.target === 'xsa') {
+					deploy_ops += " -e deploy_xsa.mtaext";
+				}
+				else if (options.target === 'cf') {
+					deploy_ops += " -e deploy_cf.mtaext";
+				}
+				else {
+					deploy_ops += " -e deploy_xsa.mtaext";
+				}
+			}
+
 			if (verbosity >= 2) { console.log("Deploy Actions:"); }
-			cmd = "xs deploy target/" + (doc.ID).toLowerCase() + ".mtar" + deploy_ops;
+			if (options.target === 'xsa') {
+				cmd = cli + " deploy target/" + (doc.ID).toLowerCase() + "_xsa.mtar" + " -e deploy_xsa.mtaext" + deploy_ops;
+			}
+			else if (options.target === 'cf') {
+				cmd = cli + " deploy target/" + (doc.ID).toLowerCase() + "_cf.mtar" + deploy_ops;
+			}
+			else {
+				cmd = cli + " deploy target/" + (doc.ID).toLowerCase() + "_xsa.mtar" + deploy_ops;
+			}
 			cmds.push(cmd); if (verbosity >= 2) { console.log(cmd); }
 
 			
 			if (verbosity >= 2) { console.log("Undeploy Actions:"); }
-			cmd = "xs undeploy " + doc.ID + " --delete-services -f";
+			cmd = cli + " undeploy " + doc.ID + " --delete-services -f";
 			cmds.push(cmd); if (verbosity >= 2) { console.log(cmd); }
 			
 			if (options['output-actions']) {
 				console.log("");
 				cmds.forEach((cmd, idx) => {
 					console.log(cmd);
+				});
+				console.log("");
+			}
+
+			// Actions needed to process what has just changed.
+
+
+			var child = {};
+			if (changed.length > 0) {
+				console.log("");
+				ccmds.forEach((cmd, idx) => {
+					console.log(cmd);
+
+					if (!(options['dry-run'])) {
+						let stdout = execSync(cmd,{stdio:[0,1,2]});
+					}
+
 				});
 				console.log("");
 			}
