@@ -110,7 +110,7 @@ auto_script += " NOW=$(date +%s); \n";
 auto_script += " DIFF=$(($NOW - $LAST)); \n";
 auto_script += " if [[ $DIFF -gt 10 ]]; then \n";
 auto_script += "  echo ; \n";
-auto_script += "  echo minion -u -c $relpath ; \n";
+auto_script += "  echo minion -ungead -t xsa -c $relpath ; \n";
 auto_script += "  minion -u -c $relpath ; \n";
 auto_script += " fi ; \n";
 auto_script += " LAST=$(date +%s); \n";
@@ -346,7 +346,7 @@ else {
 			// General Actions
 			if (verbosity >= 2) { console.log("General Actions:"); }
 
-			cmd = 'npm config set @sap:registry "https://npm.sap.com/" ; npm config set registry "https://registry.npmjs.org/" ; npm config set strict-ssl true';
+			cmd = 'npm config set @sap:registry "https://npm.sap.com/" ; npm config set registry "https://registry.npmjs.org/" ; npm config set strict-ssl true\n';
 			if (verbosity >= 2) { console.log(cmd); }
 			cmds.push(cmd);
 
@@ -411,7 +411,11 @@ else {
 								}
 
 								if (verbosity >= 2) { console.log("Action:"); }
-								if (verbosity >= 2) { console.log(cli + " cs " + svc_name + " " + svc_plan + " " + svc_inst + "\n"); }
+
+								cmd = cli + " create-service " + svc_name + " " + svc_plan + " " + svc_inst + "";
+								cmds.push(cmd);
+								if (verbosity >= 2) { console.log(cmd); }
+
 								// Bind ?
 							}
 							else {
@@ -435,8 +439,8 @@ else {
 								app_host = node.name;
 								app_path = node.name;
 
-								//app_opts = '--no-start';
-								app_opts = '';
+								app_opts = '--no-start';
+								//app_opts = '';
 
 								if (options['use-namespaces']) { 
 									app_name = (doc.ID).toLowerCase() + '.' + node.name;
@@ -475,20 +479,51 @@ else {
 												db_req = (doc.ID).toLowerCase() + '.' + db_req;
 											}
 
-											cmd = "prep4hdi-deploy " + app_path + " " + db_req;
+											cmd = "";
 											cmds.push(cmd);
 											if (verbosity >= 2) { console.log(cmd); }
 
-											cmd = "hdi-deploy " + app_path;
+											cmd = cli + " create-service " + "hana" + " " + "hdi-shared" + " " + db_req;
+											cmds.push(cmd);
+											if (verbosity >= 2) { console.log(cmd); }
+
+											cmd = "find . -type d -name '.vfs' -prune -exec rm -rf {} +";
+											cmds.push(cmd);
+											if (verbosity >= 2) { console.log(cmd); }
+
+
+											cmd = cli + " push " + app_name + " -k " + app_disk + " -m " + app_mem + " -n " + app_host + " -p " + app_path + " --no-start --no-route";
+											cmds.push(cmd);
+											if (verbosity >= 2) { console.log(cmd); }
+
+											cmd = cli + " bind-service " + app_name + " " + db_req;
+											cmds.push(cmd);
+											if (verbosity >= 2) { console.log(cmd); }
+
+											if (options.target === 'xsa') {
+												cmd = cli + " restart " + app_name + " --wait-indefinitely ; sleep 10 ; " + cli + " stop " + app_name + "";
+												cmds.push(cmd);
+												if (verbosity >= 2) { console.log(cmd); }
+											}
+											else if (options.target === 'cf') {
+												cmd = cli + " restage " + app_name + " ; sleep 1 ; " + cli + " start " + app_name + " ; sleep 20 ; " + cli + " stop " + app_name + "";
+												cmds.push(cmd);
+												if (verbosity >= 2) { console.log(cmd); }
+											}
+											else {
+											}
+
+											cmd = "";
 											cmds.push(cmd);
 											if (verbosity >= 2) { console.log(cmd); }
 										}
 									}
 								}
-
-								cmd = cli + " push " + app_name + " -k " + app_disk + " -m " + app_mem + " -n " + app_host + " -p " + app_path + " " + app_opts;
-								cmds.push(cmd);
-								if (verbosity >= 2) { console.log(cmd); }
+								else {
+									cmd = cli + " push " + app_name + " -k " + app_disk + " -m " + app_mem + " -n " + app_host + " -p " + app_path + " " + app_opts;
+									cmds.push(cmd);
+									if (verbosity >= 2) { console.log(cmd); }
+								}
 
 								if (dep === in_file) {
 									ccmds.push(cmd);
@@ -496,19 +531,83 @@ else {
 									// xs bind-service APP SERVICE_INSTANCE
 									// console.log(treeify.asTree(changed_node,true));
 									changed_node.requires.forEach((req) => {
-										// Bind to required service instance
-										var svc_name = req.name;
-										if ((options['use-namespaces']) && (!(options['no-namespaces-for-services']))) { 
-												svc_name = (doc.ID).toLowerCase() + '.' + svc_name;
+										// Check that the dependency is a resource and not another module
+										var found = false;
+										doc.resources.forEach((resource, index) => {
+											if (resource.name == req.name) {
+												// Bind to required service instance
+												var svc_name = req.name;
+												if ((options['use-namespaces']) && (!(options['no-namespaces-for-services']))) { 
+														svc_name = (doc.ID).toLowerCase() + '.' + svc_name;
+												}
+												cmd = cli + " bind-service " + app_name + " " + svc_name;
+												ccmds.push(cmd);
+												found = true;
+											}
+										});
+										if (found) {
+											if (verbosity >= 3) { console.log(req.name + " is a resource."); }
 										}
-										cmd = cli + " bind-service " + app_name + " " + svc_name;
-										ccmds.push(cmd);
+										else {	// It's not a resource so check for group called destinations
+
+// IMPORTANT NOTE:  This needs to be done not only when the html5 module changes but also when the mta.yaml changes!!! Need to figure this out!
+
+											if (verbosity >= 3) { console.log(req.name + " is another module."); }
+											if (verbosity >= 3) { console.log("Req:\n" + treeify.asTree(req,true) + "\n"); }
+											if ((typeof(req.group) == "string") && (req.group == "destinations")) {
+												if (verbosity >= 3) { console.log(req.name + " has a destinations group."); }
+												if (verbosity >= 3) { console.log(JSON.stringify(req.properties)); }
+												// add this object to a array of objects that will be used to form the destinations env var for the html5 module
+												// will need to loop through this list and find the other module that provides named  that matches req.name
+												// once you find that module's name, you will need to use the cli to ask what that module's url is
+												// xs app and cf app provide ther output differently, so may be useful to write a shell wrapper to parse
+												// and return the url uniformly.
+												// Once you have the url, then combine it to form the destinations env-var for the approuter
+												// url=$(cf app mta_xsahaa.xsjs | grep routes: | tr -s ' ' | cut -d ' ' -f 2) ; echo "https://"$url
+												// url=$(xs app mta_xsahaa.xsjs | grep urls: | tr -s ' ' | cut -d ' ' -f 3) ; echo $url
+
+											}
+											else {
+												if (verbosity >= 3) { console.log(req.name + " has no destinations group."); }
+											}
+										}
+
 									});
+									// Need to figure out how to generate this
+									// The approuter is the module at the root of the tree
+									// Will need to find it and wander through it's dependencies looking for destinations
+/*
+ - name: web
+   type: html5
+   path: web
+   parameters:
+      memory: 96MB
+      disk: 256M
+      host: xsahaa
+   requires:
+    - name: xsahaa-uaa
+    - name: xsjs_api
+      group: destinations
+      properties:
+        name: xsjs_be
+        url: ~{url}
+        forwardAuthToken: true
+*/
+									if (changed_node.type === "html5") {
+										cmd = cli + " set-env " + "mta_xsahaa.web" + " destinations " + '\'[{"forwardAuthToken": true,"name": "xsjs_be","url": "https://xsahaa-xsjs.us.sap-a-team.com"}]\'' + "";
+										cmds.push(cmd);
+										ccmds.push(cmd);
+										if (verbosity >= 2) { console.log(cmd); }
+									}
+
 									if (changed_node.requires.length > 0) {
 										cmd = cli + " restart " + app_name;
 										ccmds.push(cmd);
 									}
 								}
+
+								cmd = "";
+								cmds.push(cmd);
 
 							}
 							else {
@@ -561,8 +660,9 @@ else {
 			}
 
 			if (verbosity >= 2) { console.log("Deploy Actions:"); }
+
 			if (options.target === 'xsa') {
-				cmd = cli + " deploy target/" + (doc.ID).toLowerCase() + "_xsa.mtar" + " -e deploy_xsa.mtaext" + deploy_ops;
+				cmd = cli + " deploy target/" + (doc.ID).toLowerCase() + "_xsa.mtar" + deploy_ops;
 			}
 			else if (options.target === 'cf') {
 				cmd = cli + " deploy target/" + (doc.ID).toLowerCase() + "_cf.mtar" + deploy_ops;
@@ -572,6 +672,9 @@ else {
 			}
 			cmds.push(cmd); if (verbosity >= 2) { console.log(cmd); }
 
+			cmd = "";
+			cmds.push(cmd);
+			if (verbosity >= 2) { console.log(cmd); }
 			
 			if (verbosity >= 2) { console.log("Undeploy Actions:"); }
 			cmd = cli + " undeploy " + doc.ID + " --delete-services -f";
