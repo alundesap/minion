@@ -28,6 +28,7 @@ const optionDefinitions = [
 	{ name: 'mtaext', alias: 'e', type: Boolean, defaultValue: false },
 	{ name: 'dry-run', alias: 'd', type: Boolean, defaultValue: false },
 	{ name: 'output-actions', alias: 'a', type: Boolean, defaultValue: false },
+	{ name: 'script', type: Boolean, defaultValue: false },
 	{ name: 'target', alias: 't', type: String, defaultValue: 'xsa' }
 ]
 
@@ -102,7 +103,17 @@ const options = commandLineArgs(optionDefinitions)
 
 const commandLineUsage = require('command-line-usage')
 
-var auto_script = "DIFF=0 ; LAST=0 ; \n";
+var auto_script = "";
+auto_script += "\n";
+auto_script += "In the WebIDE, create a file called findme123.txt at the top directory of one of your projects.\n";
+auto_script += "Replace HXE with your SID if not using HANA Express.\n";
+auto_script += "\n";
+auto_script += "cd /hana/shared/HXE/xs/controller_data/fss/\n";
+auto_script += "found=$(find . -name findme123.txt -print)\n";
+auto_script += "cd ${found/findme123.txt//} ; cd .. ; pwd ; cd ~/../HDB00\n";
+auto_script += "ln -s <pwd> workspace\n";
+auto_script += "\n";
+auto_script += "DIFF=0 ; LAST=0 ; \n";
 auto_script += "inotifywait -re modify -m --exclude '/\\..+' . | \n";
 auto_script += "while read -r directory events filename; do \n";
 auto_script += " relpath=$directory$filename; \n";
@@ -175,6 +186,10 @@ const sections = [
 				description: 'Target XSA on-prem for deployment.'
 			},
 			{
+				name: 'script',
+				description: 'Output a handy automation script.'
+			},
+			{
 			name: '{underline h}elp',
 				description: 'Print this usage guide.'
 			}
@@ -210,6 +225,8 @@ var cli = 'xs';
 
 if (options.help) {
 	console.log(usage)
+}
+else if (options.script) {
 	console.log("Automation Script:\n\n" + auto_script + "\n");
 }
 else {
