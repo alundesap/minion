@@ -3,13 +3,13 @@
     "type": "git",
     "url": "git://github.com/alundesap/minion.git"
   },
-  "license" : "Apache-2.0",
+  "license": "Apache-2.0",
   "dependencies": {
-    "json-stringify-pretty-compact" : "^1.2.0",
-    "treeify" : "latest",
-    "command-line-usage" : "latest",
-    "js-yaml" : "latest",
-    "dependency-graph" : "latest",
+    "json-stringify-pretty-compact": "^1.2.0",
+    "treeify": "latest",
+    "command-line-usage": "latest",
+    "js-yaml": "latest",
+    "dependency-graph": "latest",
     "command-line-args": "^5.0.2"
   },
   "description": "NodeJS utility that reads mta.yaml files and performs needed actions.",

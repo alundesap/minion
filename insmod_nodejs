@@ -1,0 +1,49 @@
+#!/usr/local/bin/node
+
+const fs = require('fs')
+
+const yaml = require('js-yaml');
+
+const treeify = require('treeify');
+
+var verbosity = 3;
+var filename = "mta.yaml";
+
+if (verbosity >= 3) { console.log("Begin INSMOD_NodeJS"); }
+
+if (true) {
+
+    try {
+        var doc = yaml.safeLoad(fs.readFileSync(filename, 'utf8'));
+        if (verbosity >= 3) { console.log("MTA.YAML File: \n" + treeify.asTree(doc,true) + "\n"); }
+
+        var newDoc = JSON.parse(JSON.stringify(doc));
+
+        if (newDoc.modules) {
+            newDoc.modules.forEach((module, index) => {
+                if (verbosity >= 3) { console.log("mod[" + index + "]: " + module.name + "\n"); }
+            });
+        }
+        else {
+            if (verbosity >= 3) { console.log("No Modules Defined Yet.\n"); }
+        }
+
+        if (newDoc.resources) {
+            newDoc.resources.forEach((resource, index) => {
+                if (verbosity >= 3) { console.log("res[" + index + "]: " + resource.name + "\n"); }
+            });
+        }
+        else {
+            if (verbosity >= 3) { console.log("No Resources Defined Yet.\n"); }
+        }
+
+    } catch (e) {
+        if (verbosity >= 2) { console.log("Yaml load error:" + e); }
+    }
+}
+else {
+    if (verbosity >= 2) { console.log("File: " + filename + " doesn't exist.\n"); }
+}
+
+if (verbosity >= 3) { console.log("End INSMOD_NodeJS"); }
+
